@@ -293,6 +293,8 @@ public class JsonTreeReaderTest {
             "isLenient()",
             "setStrictness(com.google.gson.Strictness)",
             "getStrictness()",
+            "setDuplicateMemberPolicy(com.google.gson.DuplicateMemberPolicy)",
+            "getDuplicateMemberPolicy()",
             "setNestingLimit(int)",
             "getNestingLimit()");
     MoreAsserts.assertOverridesMethods(JsonReader.class, JsonTreeReader.class, ignoredMethods);

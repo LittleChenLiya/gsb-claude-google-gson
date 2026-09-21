@@ -145,6 +145,7 @@ public final class GsonBuilder {
   FormattingStyle formattingStyle = DEFAULT_FORMATTING_STYLE;
   boolean generateNonExecutableJson = DEFAULT_JSON_NON_EXECUTABLE;
   Strictness strictness = DEFAULT_STRICTNESS;
+  DuplicateMemberPolicy duplicateMemberPolicy = DuplicateMemberPolicy.ALLOW;
   boolean useJdkUnsafe = DEFAULT_USE_JDK_UNSAFE;
   ToNumberStrategy objectToNumberStrategy = DEFAULT_OBJECT_TO_NUMBER_STRATEGY;
   ToNumberStrategy numberToNumberStrategy = DEFAULT_NUMBER_TO_NUMBER_STRATEGY;
@@ -173,6 +174,7 @@ public final class GsonBuilder {
     this.escapeHtmlChars = gson.htmlSafe;
     this.formattingStyle = gson.formattingStyle;
     this.strictness = gson.strictness;
+    this.duplicateMemberPolicy = gson.duplicateMemberPolicy;
     this.serializeSpecialFloatingPointValues = gson.serializeSpecialFloatingPointValues;
     this.longSerializationPolicy = gson.longSerializationPolicy;
     this.datePattern = gson.datePattern;
@@ -600,6 +602,30 @@ public final class GsonBuilder {
   @CanIgnoreReturnValue
   public GsonBuilder setStrictness(Strictness strictness) {
     this.strictness = Objects.requireNonNull(strictness);
+    return this;
+  }
+
+  /**
+   * Sets the policy for handling duplicate member names within a JSON object when reading.
+   *
+   * <p>The default is {@link DuplicateMemberPolicy#ALLOW}, which preserves the historic behavior
+   * where every {@link TypeAdapter} decides on its own how to handle duplicate member names (most
+   * adapters let a later occurrence overwrite the previous one). When set to {@link
+   * DuplicateMemberPolicy#REJECT}, the {@link JsonReader} used for deserialization rejects any JSON
+   * object which contains the same (decoded) member name twice, regardless of the target type being
+   * deserialized. See {@link JsonReader#setDuplicateMemberPolicy(DuplicateMemberPolicy)} for
+   * details.
+   *
+   * <p>This setting only affects deserialization; it has no effect on the JSON written by {@code
+   * Gson}.
+   *
+   * @param policy the new duplicate member policy. May not be {@code null}.
+   * @return a reference to this {@code GsonBuilder} object to fulfill the "Builder" pattern.
+   * @see JsonReader#setDuplicateMemberPolicy(DuplicateMemberPolicy)
+   */
+  @CanIgnoreReturnValue
+  public GsonBuilder setDuplicateMemberPolicy(DuplicateMemberPolicy policy) {
+    this.duplicateMemberPolicy = Objects.requireNonNull(policy);
     return this;
   }
 

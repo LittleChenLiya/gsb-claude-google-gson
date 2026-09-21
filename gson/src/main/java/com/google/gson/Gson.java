@@ -189,6 +189,7 @@ public final class Gson {
   final boolean htmlSafe;
   final FormattingStyle formattingStyle;
   final Strictness strictness;
+  final DuplicateMemberPolicy duplicateMemberPolicy;
   final boolean serializeSpecialFloatingPointValues;
   final boolean useJdkUnsafe;
   final String datePattern;
@@ -238,6 +239,8 @@ public final class Gson {
    *       GsonBuilder#excludeFieldsWithModifiers(int...)}.
    *   <li>No explicit strictness is set. You can change this by calling {@link
    *       GsonBuilder#setStrictness(Strictness)}.
+   *   <li>Duplicate member names within a JSON object are allowed when reading. You can change this
+   *       by calling {@link GsonBuilder#setDuplicateMemberPolicy(DuplicateMemberPolicy)}.
    * </ul>
    */
   public Gson() {
@@ -254,6 +257,7 @@ public final class Gson {
     this.htmlSafe = builder.escapeHtmlChars;
     this.formattingStyle = builder.formattingStyle;
     this.strictness = builder.strictness;
+    this.duplicateMemberPolicy = builder.duplicateMemberPolicy;
     this.serializeSpecialFloatingPointValues = builder.serializeSpecialFloatingPointValues;
     this.useJdkUnsafe = builder.useJdkUnsafe;
     this.longSerializationPolicy = builder.longSerializationPolicy;
@@ -816,11 +820,15 @@ public final class Gson {
    *       GsonBuilder#setStrictness(Strictness) explicit strictness has been set} the created
    *       reader will have a strictness of {@link Strictness#LEGACY_STRICT}. Otherwise, the
    *       strictness of the {@code Gson} instance will be used for the created reader.
+   *   <li>{@link GsonBuilder#setDuplicateMemberPolicy(DuplicateMemberPolicy)}. The created reader
+   *       will use the duplicate member policy of the {@code Gson} instance, which is {@link
+   *       DuplicateMemberPolicy#ALLOW} unless configured otherwise.
    * </ul>
    */
   public JsonReader newJsonReader(Reader reader) {
     JsonReader jsonReader = new JsonReader(reader);
     jsonReader.setStrictness(strictness == null ? Strictness.LEGACY_STRICT : strictness);
+    jsonReader.setDuplicateMemberPolicy(duplicateMemberPolicy);
     return jsonReader;
   }
 

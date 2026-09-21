@@ -15,6 +15,7 @@
    * [Collections Examples](#collections-examples)
      * [Collections Limitations](#collections-limitations)
    * [Maps Examples](#maps-examples)
+   * [Duplicate Object Members](#duplicate-object-members)
    * [Serializing and Deserializing Generic Types](#serializing-and-deserializing-generic-types)
    * [Serializing and Deserializing Collection with Objects of Arbitrary Types](#serializing-and-deserializing-collection-with-objects-of-arbitrary-types)
    * [Built-in Serializers and Deserializers](#built-in-serializers-and-deserializers)
@@ -308,6 +309,26 @@ String json = gson.toJson(stringMap); // ==> {"key":"value"}
 **Important:** Because Gson by default uses `toString()` to serialize Map keys, this can lead to malformed encoded keys or can cause mismatch between serialization and deserialization of the keys, for example when `toString()` is not properly implemented. A workaround for this can be to use `enableComplexMapKeySerialization()` to make sure the `TypeAdapter` registered for the Map key type is used for deserialization _and_ serialization. As shown in the example above, when none of the keys are serialized by the adapter as JSON array or JSON object, the Map is serialized as a regular JSON object, as desired.
 
 Note that when deserializing enums as Map keys, if Gson is unable to find an enum constant with a matching `name()` value respectively `@SerializedName` annotation, it falls back to looking up the enum constant by its `toString()` value. This is to work around the issue described above, but only applies to enum constants.
+
+### Duplicate Object Members
+
+When a JSON object contains the same member name multiple times, Gson by default does not reject it. Instead every `TypeAdapter` decides on its own how to handle the duplicates; for most adapters (including the ones for POJOs, `Object` and `JsonElement`) the last occurrence of a member overwrites the previous one, whereas the adapter for `Map` performs its own duplicate key check.
+
+To get a consistent behavior independent of the target type, a duplicate member check can be enabled. It is performed by `JsonReader` at the syntax level and therefore applies uniformly to all target types, to custom `TypeAdapter` implementations calling `JsonReader.nextName()`, and even to JSON objects skipped with `JsonReader.skipValue()`:
+
+```java
+Gson gson = new GsonBuilder()
+    .setDuplicateMemberPolicy(DuplicateMemberPolicy.REJECT)
+    .create();
+// Throws JsonSyntaxException because the member "a" occurs twice
+MyClass obj = gson.fromJson("{\"a\":1,\"a\":2}", MyClass.class);
+```
+
+The policy can also be set directly on a `JsonReader` with `JsonReader.setDuplicateMemberPolicy(DuplicateMemberPolicy.REJECT)`.
+
+The check compares the decoded member names, so for example `"a"` and its Unicode escape form `"\\u0061"` are considered equal. It is scoped to a single JSON object: nested objects may reuse member names of enclosing objects, and separate objects within the same array do not affect each other. When a duplicate is detected, reading fails immediately with a `MalformedJsonException` (wrapped in a `JsonSyntaxException` by `Gson.fromJson`) whose message contains the member path and location, before the value of the duplicate member is consumed.
+
+Note that the check only compares the raw JSON member names. Two distinct member names which are both mapped to the same Java field (for example through `@SerializedName` alternates) are not considered duplicates, and the equivalence checks performed by `Map` key adapters on the deserialized key values are unaffected as well. Deserializing an already constructed `JsonElement` is not affected either because a `JsonObject` cannot contain duplicate member names.
 
 ### Serializing and Deserializing Generic Types
 
