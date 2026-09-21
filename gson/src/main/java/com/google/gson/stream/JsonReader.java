@@ -16,6 +16,7 @@
 
 package com.google.gson.stream;
 
+import com.google.gson.DuplicateMemberPolicy;
 import com.google.gson.Strictness;
 import com.google.gson.internal.JsonReaderInternalAccess;
 import com.google.gson.internal.TroubleshootingGuide;
@@ -24,8 +25,12 @@ import java.io.Closeable;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.Reader;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Reads a JSON (<a href="https://www.ietf.org/rfc/rfc8259.txt">RFC 8259</a>) encoded value as a
@@ -69,6 +74,8 @@ import java.util.Objects;
  * <ul>
  *   <li>{@link #setStrictness(Strictness)}, the default is {@link Strictness#LEGACY_STRICT}
  *   <li>{@link #setNestingLimit(int)}, the default is {@value #DEFAULT_NESTING_LIMIT}
+ *   <li>{@link #setDuplicateMemberPolicy(DuplicateMemberPolicy)}, the default is {@link
+ *       DuplicateMemberPolicy#ALLOW}
  * </ul>
  *
  * The default configuration of {@code JsonReader} instances used internally by the {@link
@@ -318,6 +325,17 @@ public class JsonReader implements Closeable {
    */
   private boolean promotedName;
 
+  private DuplicateMemberPolicy duplicateMemberPolicy = DuplicateMemberPolicy.ALLOW;
+
+  /**
+   * Member names already read for the currently open object scopes; corresponds directly to {@link
+   * #stack}. Contains a (possibly empty) set at indices where the stack contains an object scope,
+   * and {@code null} for all other scopes. Is {@code null} itself unless the {@linkplain
+   * #setDuplicateMemberPolicy(DuplicateMemberPolicy) duplicate member policy} is {@link
+   * DuplicateMemberPolicy#REJECT}.
+   */
+  private List<Set<String>> objectMemberNames;
+
   /** Creates a new instance that reads a JSON-encoded stream from {@code in}. */
   public JsonReader(Reader in) {
     this.in = Objects.requireNonNull(in, "in == null");
@@ -423,6 +441,60 @@ public class JsonReader implements Closeable {
   }
 
   /**
+   * Sets the {@linkplain DuplicateMemberPolicy duplicate member policy} of this reader.
+   *
+   * <p>When the policy is {@link DuplicateMemberPolicy#REJECT}, this reader keeps track of the
+   * member names of every JSON object it reads and throws a {@link MalformedJsonException} as soon
+   * as a member name is read which already occurred in the same object. The comparison is performed
+   * on the decoded member names, so for example {@code "a"} and its Unicode-escaped form {@code
+   * "\u0061"} are considered equal. The check is performed per object scope: a nested object may
+   * reuse names of its enclosing object, and separate objects don't share member name state. The
+   * tracked names are discarded once the corresponding object scope is left.
+   *
+   * <p>The check is performed at the syntax level of this reader, so it applies regardless of how
+   * the members are consumed, including members skipped with {@link #skipValue()}.
+   *
+   * <p>When this is called while JSON values are already being read, only member names read from
+   * that point on are tracked; names of objects which are already open are not recorded
+   * retroactively.
+   *
+   * @param policy the new duplicate member policy of this reader. May not be {@code null}.
+   * @see #getDuplicateMemberPolicy()
+   * @since 2.14.1
+   */
+  public final void setDuplicateMemberPolicy(DuplicateMemberPolicy policy) {
+    Objects.requireNonNull(policy);
+    if (policy == duplicateMemberPolicy) {
+      return;
+    }
+    duplicateMemberPolicy = policy;
+    if (policy == DuplicateMemberPolicy.REJECT) {
+      // Start tracking; for already open scopes no names have been recorded yet
+      objectMemberNames = new ArrayList<>(stackSize);
+      for (int i = 0; i < stackSize; i++) {
+        int scope = stack[i];
+        boolean isObject =
+            scope == JsonScope.EMPTY_OBJECT
+                || scope == JsonScope.DANGLING_NAME
+                || scope == JsonScope.NONEMPTY_OBJECT;
+        objectMemberNames.add(isObject ? new HashSet<>() : null);
+      }
+    } else {
+      objectMemberNames = null;
+    }
+  }
+
+  /**
+   * Returns the {@linkplain DuplicateMemberPolicy duplicate member policy} of this reader.
+   *
+   * @see #setDuplicateMemberPolicy(DuplicateMemberPolicy)
+   * @since 2.14.1
+   */
+  public final DuplicateMemberPolicy getDuplicateMemberPolicy() {
+    return duplicateMemberPolicy;
+  }
+
+  /**
    * Sets the nesting limit of this reader.
    *
    * <p>The nesting limit defines how many JSON arrays or objects may be open at the same time. For
@@ -490,6 +562,7 @@ public class JsonReader implements Closeable {
     }
     if (p == PEEKED_END_ARRAY) {
       stackSize--;
+      popMemberNames();
       pathIndices[stackSize - 1]++;
       peeked = PEEKED_NONE;
     } else {
@@ -529,6 +602,7 @@ public class JsonReader implements Closeable {
     }
     if (p == PEEKED_END_OBJECT) {
       stackSize--;
+      popMemberNames();
       pathNames[stackSize] = null; // Free the last path name so that it can be garbage collected!
       pathIndices[stackSize - 1]++;
       peeked = PEEKED_NONE;
@@ -975,14 +1049,18 @@ public class JsonReader implements Closeable {
     }
     peeked = PEEKED_NONE;
     pathNames[stackSize - 1] = result;
+    checkForDuplicateMember(result);
     return result;
   }
 
   /** Records a promoted property name in the JSON path after it has been consumed as a value. */
-  private void recordPromotedName(String name) {
+  private void recordPromotedName(String name) throws MalformedJsonException {
     if (promotedName) {
       pathNames[stackSize - 1] = name;
       promotedName = false;
+      // A promoted name is a member name consumed as a value (for example by the Map type
+      // adapter); it has to be checked for duplicates as well
+      checkForDuplicateMember(name);
     }
   }
 
@@ -1482,6 +1560,9 @@ public class JsonReader implements Closeable {
     peeked = PEEKED_NONE;
     stack[0] = JsonScope.CLOSED;
     stackSize = 1;
+    if (objectMemberNames != null) {
+      objectMemberNames.clear();
+    }
     in.close();
   }
 
@@ -1520,6 +1601,7 @@ public class JsonReader implements Closeable {
           break;
         case PEEKED_END_ARRAY:
           stackSize--;
+          popMemberNames();
           count--;
           break;
         case PEEKED_END_OBJECT:
@@ -1530,33 +1612,63 @@ public class JsonReader implements Closeable {
             pathNames[stackSize - 1] = null;
           }
           stackSize--;
+          popMemberNames();
           count--;
           break;
         case PEEKED_UNQUOTED:
-          skipUnquotedValue();
+          // A promoted name skipped as value has to be decoded to check it for duplicates
+          if (objectMemberNames != null && promotedName) {
+            checkForDuplicateMember(nextUnquotedValue());
+            promotedName = false;
+          } else {
+            skipUnquotedValue();
+          }
           break;
         case PEEKED_SINGLE_QUOTED:
-          skipQuotedValue('\'');
+          if (objectMemberNames != null && promotedName) {
+            checkForDuplicateMember(nextQuotedValue('\''));
+            promotedName = false;
+          } else {
+            skipQuotedValue('\'');
+          }
           break;
         case PEEKED_DOUBLE_QUOTED:
-          skipQuotedValue('"');
+          if (objectMemberNames != null && promotedName) {
+            checkForDuplicateMember(nextQuotedValue('"'));
+            promotedName = false;
+          } else {
+            skipQuotedValue('"');
+          }
           break;
         case PEEKED_UNQUOTED_NAME:
-          skipUnquotedValue();
+          // When checking for duplicate members the name has to be decoded instead of skipped
+          if (objectMemberNames != null) {
+            checkForDuplicateMember(nextUnquotedValue());
+          } else {
+            skipUnquotedValue();
+          }
           // Only update when name is explicitly skipped, otherwise stack is not updated anyways
           if (count == 0) {
             pathNames[stackSize - 1] = "<skipped>";
           }
           break;
         case PEEKED_SINGLE_QUOTED_NAME:
-          skipQuotedValue('\'');
+          if (objectMemberNames != null) {
+            checkForDuplicateMember(nextQuotedValue('\''));
+          } else {
+            skipQuotedValue('\'');
+          }
           // Only update when name is explicitly skipped, otherwise stack is not updated anyways
           if (count == 0) {
             pathNames[stackSize - 1] = "<skipped>";
           }
           break;
         case PEEKED_DOUBLE_QUOTED_NAME:
-          skipQuotedValue('"');
+          if (objectMemberNames != null) {
+            checkForDuplicateMember(nextQuotedValue('"'));
+          } else {
+            skipQuotedValue('"');
+          }
           // Only update when name is explicitly skipped, otherwise stack is not updated anyways
           if (count == 0) {
             pathNames[stackSize - 1] = "<skipped>";
@@ -1593,6 +1705,31 @@ public class JsonReader implements Closeable {
       pathNames = Arrays.copyOf(pathNames, newLength);
     }
     stack[stackSize++] = newTop;
+    if (objectMemberNames != null) {
+      objectMemberNames.add(newTop == JsonScope.EMPTY_OBJECT ? new HashSet<>() : null);
+    }
+  }
+
+  /** Discards the duplicate member tracking state of the scope which is being left. */
+  private void popMemberNames() {
+    if (objectMemberNames != null) {
+      objectMemberNames.remove(objectMemberNames.size() - 1);
+    }
+  }
+
+  /**
+   * Checks whether {@code name} already occurred as member name in the current object scope, and
+   * records it otherwise. Does nothing unless the duplicate member policy is {@link
+   * DuplicateMemberPolicy#REJECT}.
+   */
+  private void checkForDuplicateMember(String name) throws MalformedJsonException {
+    if (objectMemberNames == null) {
+      return;
+    }
+    Set<String> memberNames = objectMemberNames.get(objectMemberNames.size() - 1);
+    if (memberNames != null && !memberNames.add(name)) {
+      throw syntaxError("Duplicate member \"" + name + "\"");
+    }
   }
 
   /**

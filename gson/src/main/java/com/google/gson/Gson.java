@@ -189,6 +189,7 @@ public final class Gson {
   final boolean htmlSafe;
   final FormattingStyle formattingStyle;
   final Strictness strictness;
+  final DuplicateMemberPolicy duplicateMemberPolicy;
   final boolean serializeSpecialFloatingPointValues;
   final boolean useJdkUnsafe;
   final String datePattern;
@@ -238,6 +239,8 @@ public final class Gson {
    *       GsonBuilder#excludeFieldsWithModifiers(int...)}.
    *   <li>No explicit strictness is set. You can change this by calling {@link
    *       GsonBuilder#setStrictness(Strictness)}.
+   *   <li>JSON objects with duplicate member names are accepted when reading JSON. You can change
+   *       this by calling {@link GsonBuilder#setDuplicateMemberPolicy(DuplicateMemberPolicy)}.
    * </ul>
    */
   public Gson() {
@@ -254,6 +257,7 @@ public final class Gson {
     this.htmlSafe = builder.escapeHtmlChars;
     this.formattingStyle = builder.formattingStyle;
     this.strictness = builder.strictness;
+    this.duplicateMemberPolicy = builder.duplicateMemberPolicy;
     this.serializeSpecialFloatingPointValues = builder.serializeSpecialFloatingPointValues;
     this.useJdkUnsafe = builder.useJdkUnsafe;
     this.longSerializationPolicy = builder.longSerializationPolicy;
@@ -816,11 +820,14 @@ public final class Gson {
    *       GsonBuilder#setStrictness(Strictness) explicit strictness has been set} the created
    *       reader will have a strictness of {@link Strictness#LEGACY_STRICT}. Otherwise, the
    *       strictness of the {@code Gson} instance will be used for the created reader.
+   *   <li>{@link GsonBuilder#setDuplicateMemberPolicy(DuplicateMemberPolicy)}. The created reader
+   *       will use the duplicate member policy of the {@code Gson} instance.
    * </ul>
    */
   public JsonReader newJsonReader(Reader reader) {
     JsonReader jsonReader = new JsonReader(reader);
     jsonReader.setStrictness(strictness == null ? Strictness.LEGACY_STRICT : strictness);
+    jsonReader.setDuplicateMemberPolicy(duplicateMemberPolicy);
     return jsonReader;
   }
 
@@ -1032,6 +1039,14 @@ public final class Gson {
    * Note that in all cases the old strictness setting of the reader will be restored when this
    * method returns.
    *
+   * <p>If the {@code Gson} instance has been configured with {@linkplain
+   * GsonBuilder#setDuplicateMemberPolicy(DuplicateMemberPolicy) DuplicateMemberPolicy#REJECT}, this
+   * policy will be used for reading the JSON regardless of the {@linkplain
+   * JsonReader#getDuplicateMemberPolicy() duplicate member policy} of the provided {@link
+   * JsonReader}.<br>
+   * Note that in all cases the old duplicate member policy of the reader will be restored when this
+   * method returns.
+   *
    * @param <T> the type of the desired object
    * @param reader the reader whose next JSON value should be deserialized
    * @param typeOfT The specific genericized type of src
@@ -1066,6 +1081,14 @@ public final class Gson {
    * Note that in all cases the old strictness setting of the reader will be restored when this
    * method returns.
    *
+   * <p>If the {@code Gson} instance has been configured with {@linkplain
+   * GsonBuilder#setDuplicateMemberPolicy(DuplicateMemberPolicy) DuplicateMemberPolicy#REJECT}, this
+   * policy will be used for reading the JSON regardless of the {@linkplain
+   * JsonReader#getDuplicateMemberPolicy() duplicate member policy} of the provided {@link
+   * JsonReader}.<br>
+   * Note that in all cases the old duplicate member policy of the reader will be restored when this
+   * method returns.
+   *
    * @param <T> the type of the desired object
    * @param reader the reader whose next JSON value should be deserialized
    * @param typeOfT The specific genericized type of src. You should create an anonymous subclass of
@@ -1088,12 +1111,16 @@ public final class Gson {
       throws JsonIOException, JsonSyntaxException {
     boolean isEmpty = true;
     Strictness oldStrictness = reader.getStrictness();
+    DuplicateMemberPolicy oldDuplicateMemberPolicy = reader.getDuplicateMemberPolicy();
 
     if (this.strictness != null) {
       reader.setStrictness(this.strictness);
     } else if (reader.getStrictness() == Strictness.LEGACY_STRICT) {
       // For backward compatibility change to LENIENT if reader has default strictness LEGACY_STRICT
       reader.setStrictness(Strictness.LENIENT);
+    }
+    if (this.duplicateMemberPolicy == DuplicateMemberPolicy.REJECT) {
+      reader.setDuplicateMemberPolicy(DuplicateMemberPolicy.REJECT);
     }
 
     try {
@@ -1132,6 +1159,7 @@ public final class Gson {
           "AssertionError (GSON " + GsonBuildConfig.VERSION + "): " + e.getMessage(), e);
     } finally {
       reader.setStrictness(oldStrictness);
+      reader.setDuplicateMemberPolicy(oldDuplicateMemberPolicy);
     }
   }
 

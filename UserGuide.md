@@ -741,6 +741,20 @@ In addition Gson's object model and data binding, you can use Gson to read from 
 
 You can also combine streaming and object model access to get the best of both approaches. For example by starting to manually read a JSON document using a `JsonReader` and then using [`Gson#fromJson(JsonReader, ...)`](https://javadoc.io/doc/com.google.code.gson/gson/latest/com.google.gson/com/google/gson/Gson.html#fromJson(com.google.gson.stream.JsonReader,java.lang.reflect.Type)) to read a nested value, or starting to manually write a JSON document using a `JsonWriter` and then using [`Gson#toJson(..., JsonWriter)`](https://javadoc.io/doc/com.google.code.gson/gson/latest/com.google.gson/com/google/gson/Gson.html#toJson(java.lang.Object,java.lang.reflect.Type,com.google.gson.stream.JsonWriter)) to write a nested value.
 
+### Duplicate Object Members
+
+The JSON specification states that the member names within an object should be unique, but it does not require implementations to enforce this. By default Gson accepts objects with duplicate member names; how they are handled then depends on the target type (for example, for POJOs and the `Object` and `JsonElement` types the last occurrence wins, whereas the `Map` adapter rejects duplicate keys on its own).
+
+If you want duplicates to be rejected consistently regardless of the target type, use `GsonBuilder.setDuplicateMemberPolicy(DuplicateMemberPolicy.REJECT)`:
+
+```java
+Gson gson = new GsonBuilder()
+    .setDuplicateMemberPolicy(DuplicateMemberPolicy.REJECT)
+    .create();
+```
+
+Deserialization then fails with a `MalformedJsonException` as soon as the second occurrence of a member name is read, before its value is consumed. The comparison is performed on the decoded member names, so a name and its Unicode-escaped form (for example `"a"` and `"\u0061"`) are considered equal. The check is performed per object scope: nested objects may reuse names of their enclosing objects, and separate objects don't share member name state. When reading JSON manually with a `JsonReader`, the policy can also be set directly on the reader with `JsonReader.setDuplicateMemberPolicy(...)`.
+
 ## Issues in Designing Gson
 
 See the [Gson design document](GsonDesignDocument.md "Gson design document") for a discussion of issues we faced while designing Gson. It also includes a comparison of Gson with other Java libraries that can be used for JSON conversion.

@@ -294,7 +294,9 @@ public class JsonTreeReaderTest {
             "setStrictness(com.google.gson.Strictness)",
             "getStrictness()",
             "setNestingLimit(int)",
-            "getNestingLimit()");
+            "getNestingLimit()",
+            "setDuplicateMemberPolicy(com.google.gson.DuplicateMemberPolicy)",
+            "getDuplicateMemberPolicy()");
     MoreAsserts.assertOverridesMethods(JsonReader.class, JsonTreeReader.class, ignoredMethods);
   }
 }

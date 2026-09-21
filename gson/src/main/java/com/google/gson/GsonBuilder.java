@@ -94,6 +94,8 @@ public final class GsonBuilder {
   private static final boolean DEFAULT_JSON_NON_EXECUTABLE = false;
   // Strictness of `null` is the legacy mode where some Gson APIs are always lenient
   private static final Strictness DEFAULT_STRICTNESS = null;
+  private static final DuplicateMemberPolicy DEFAULT_DUPLICATE_MEMBER_POLICY =
+      DuplicateMemberPolicy.ALLOW;
   private static final FormattingStyle DEFAULT_FORMATTING_STYLE = FormattingStyle.COMPACT;
   private static final boolean DEFAULT_ESCAPE_HTML = true;
   private static final boolean DEFAULT_SERIALIZE_NULLS = false;
@@ -145,6 +147,7 @@ public final class GsonBuilder {
   FormattingStyle formattingStyle = DEFAULT_FORMATTING_STYLE;
   boolean generateNonExecutableJson = DEFAULT_JSON_NON_EXECUTABLE;
   Strictness strictness = DEFAULT_STRICTNESS;
+  DuplicateMemberPolicy duplicateMemberPolicy = DEFAULT_DUPLICATE_MEMBER_POLICY;
   boolean useJdkUnsafe = DEFAULT_USE_JDK_UNSAFE;
   ToNumberStrategy objectToNumberStrategy = DEFAULT_OBJECT_TO_NUMBER_STRATEGY;
   ToNumberStrategy numberToNumberStrategy = DEFAULT_NUMBER_TO_NUMBER_STRATEGY;
@@ -173,6 +176,7 @@ public final class GsonBuilder {
     this.escapeHtmlChars = gson.htmlSafe;
     this.formattingStyle = gson.formattingStyle;
     this.strictness = gson.strictness;
+    this.duplicateMemberPolicy = gson.duplicateMemberPolicy;
     this.serializeSpecialFloatingPointValues = gson.serializeSpecialFloatingPointValues;
     this.longSerializationPolicy = gson.longSerializationPolicy;
     this.datePattern = gson.datePattern;
@@ -600,6 +604,28 @@ public final class GsonBuilder {
   @CanIgnoreReturnValue
   public GsonBuilder setStrictness(Strictness strictness) {
     this.strictness = Objects.requireNonNull(strictness);
+    return this;
+  }
+
+  /**
+   * Sets the {@linkplain DuplicateMemberPolicy duplicate member policy} used when reading JSON.
+   *
+   * <p>By default the policy is {@link DuplicateMemberPolicy#ALLOW} and JSON objects with duplicate
+   * member names are accepted; how duplicates are handled then depends on the type being
+   * deserialized (for example, for {@link java.util.Map} and POJOs the last occurrence usually
+   * wins). When this is set to {@link DuplicateMemberPolicy#REJECT}, deserialization instead fails
+   * with a {@link com.google.gson.stream.MalformedJsonException} as soon as a duplicate member name
+   * is read, regardless of the target type. See {@link
+   * JsonReader#setDuplicateMemberPolicy(DuplicateMemberPolicy)} for details.
+   *
+   * @param duplicateMemberPolicy the new duplicate member policy. May not be {@code null}.
+   * @return a reference to this {@code GsonBuilder} object to fulfill the "Builder" pattern.
+   * @see JsonReader#setDuplicateMemberPolicy(DuplicateMemberPolicy)
+   * @since 2.14.1
+   */
+  @CanIgnoreReturnValue
+  public GsonBuilder setDuplicateMemberPolicy(DuplicateMemberPolicy duplicateMemberPolicy) {
+    this.duplicateMemberPolicy = Objects.requireNonNull(duplicateMemberPolicy);
     return this;
   }
 
