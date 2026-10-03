@@ -72,6 +72,7 @@ public class ModuleTest {
         .containsExactly(
             "com.google.gson",
             "com.google.gson.annotations",
+            "com.google.gson.enums",
             "com.google.gson.reflect",
             "com.google.gson.stream");
     // Gson currently does not export packages to specific modules only

@@ -20,7 +20,11 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertThrows;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.annotations.SerializedName;
+import com.google.gson.enums.EnumValue;
+import com.google.gson.enums.EnumValueTypeAdapterFactory;
+import com.google.gson.jpms_test.opened.ExportedPackagesTestColor;
 import com.google.gson.reflect.TypeToken;
 import com.google.gson.stream.JsonReader;
 import java.io.IOException;
@@ -29,6 +33,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InaccessibleObjectException;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Type;
 import java.util.Arrays;
 import org.junit.Test;
 
@@ -63,6 +68,23 @@ public class ExportedPackagesTest {
   public void testReflectPackage() {
     var typeToken = TypeToken.get(String.class);
     assertThat(typeToken.getRawType()).isEqualTo(String.class);
+  }
+
+  /** Tests package {@code com.google.gson.enums} */
+  @Test
+  public void testEnumsPackage() {
+    Gson gson =
+        new GsonBuilder().registerTypeAdapterFactory(new EnumValueTypeAdapterFactory()).create();
+    Type type = new TypeToken<EnumValue<ExportedPackagesTestColor>>() {}.getType();
+
+    EnumValue<ExportedPackagesTestColor> red = gson.fromJson("\"crimson\"", type);
+    assertThat(red).isEqualTo(EnumValue.of(ExportedPackagesTestColor.RED));
+    EnumValue<ExportedPackagesTestColor> future = gson.fromJson("\"future\"", type);
+    assertThat(future).isEqualTo(EnumValue.unknown("future"));
+    EnumValue<ExportedPackagesTestColor> jsonNull = gson.fromJson("null", type);
+    assertThat(jsonNull).isEqualTo(EnumValue.ofNull());
+    assertThat(gson.toJson(EnumValue.of(ExportedPackagesTestColor.BLUE), type))
+        .isEqualTo("\"BLUE\"");
   }
 
   /** Tests package {@code com.google.gson.stream} */
