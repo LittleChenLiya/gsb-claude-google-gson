@@ -84,7 +84,12 @@ public final class ReflectiveTypeAdapterFactory implements TypeAdapterFactory {
   /** first element holds the default name */
   @SuppressWarnings("MixedMutabilityReturnType")
   private List<String> getFieldNames(Field f) {
+    return getFieldNames(f, fieldNamingPolicy);
+  }
 
+  /** first element holds the default name */
+  @SuppressWarnings("MixedMutabilityReturnType")
+  private static List<String> getFieldNames(Field f, FieldNamingStrategy fieldNamingPolicy) {
     String fieldName;
     List<String> alternates;
     SerializedName annotation = f.getAnnotation(SerializedName.class);
@@ -336,6 +341,82 @@ public final class ReflectiveTypeAdapterFactory implements TypeAdapterFactory {
             + ReflectionHelper.fieldToString(field2)
             + "\nSee "
             + TroubleshootingGuide.createUrl("duplicate-fields"));
+  }
+
+  /**
+   * Performs an explicit precheck of the JSON field names of the given type, throwing an exception
+   * if any two fields would be written to, or read from, the same JSON member name.
+   *
+   * <p>This check is side-effect free. In particular it does not create any {@link TypeAdapter},
+   * does not instantiate the type, does not make fields accessible and does not invoke field
+   * getters. It only inspects the field structure of the type (and its superclasses), applies the
+   * configured {@link FieldNamingStrategy}, {@link SerializedName} annotations (including their
+   * alternates) and field exclusions, and resolves generic field types along the given type token.
+   *
+   * <p>Conflicts are detected separately for the serialization and deserialization directions. A
+   * field that is excluded for one direction only participates in the other direction; a field
+   * excluded for both directions does not participate at all. For deserialization, a field's
+   * default name together with all of its {@link SerializedName#alternate() alternate} names are
+   * considered; for serialization only the default name is considered.
+   *
+   * <p>This allows naming conflicts to be detected before any JSON is read, without the cost or
+   * side effects of building the full reflection-based adapter. Note that the reflection adapter
+   * itself performs the same check when it is created, so calling this method is optional; it is
+   * provided as an explicit, lightweight alternative.
+   *
+   * @param gson the Gson instance providing the field naming strategy and excluder
+   * @param type the type to check
+   * @throws IllegalArgumentException if two fields conflict on the same JSON member name
+   * @since 2.14.1
+   */
+  @SuppressWarnings("deprecation") // Gson.excluder() is deprecated but exposes the internal Excluder
+  public static void checkFieldNaming(Gson gson, TypeToken<?> type) {
+    FieldNamingStrategy fieldNamingPolicy = gson.fieldNamingStrategy();
+    Excluder excluder = gson.excluder();
+
+    // Maps from JSON member name to the field that would be written to / read from that name.
+    Map<String, Field> serializedNames = new LinkedHashMap<>();
+    Map<String, Field> deserializedNames = new LinkedHashMap<>();
+
+    Class<?> originalRaw = type.getRawType();
+    TypeToken<?> currentType = type;
+    while (currentType.getRawType() != Object.class) {
+      Class<?> raw = currentType.getRawType();
+      Field[] fields = raw.getDeclaredFields();
+
+      for (Field field : fields) {
+        boolean serialize = !excluder.excludeField(field, true);
+        boolean deserialize = !excluder.excludeField(field, false);
+        if (!serialize && !deserialize) {
+          continue;
+        }
+
+        List<String> fieldNames = getFieldNames(field, fieldNamingPolicy);
+
+        if (deserialize) {
+          for (String name : fieldNames) {
+            checkFieldName(deserializedNames, name, field, originalRaw);
+          }
+        }
+
+        if (serialize) {
+          checkFieldName(serializedNames, fieldNames.get(0), field, originalRaw);
+        }
+      }
+
+      currentType =
+          TypeToken.get(
+              GsonTypes.resolve(
+                  currentType.getType(), raw, raw.getGenericSuperclass()));
+    }
+  }
+
+  private static void checkFieldName(
+      Map<String, Field> seen, String name, Field field, Class<?> declaringType) {
+    Field previous = seen.put(name, field);
+    if (previous != null) {
+      throw createDuplicateFieldException(declaringType, name, previous, field);
+    }
   }
 
   private FieldsData getBoundFields(
