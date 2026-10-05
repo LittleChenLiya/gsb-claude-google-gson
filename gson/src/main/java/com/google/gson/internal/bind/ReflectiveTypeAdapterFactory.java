@@ -53,8 +53,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Type adapter that reflects over the fields and methods of a class. */
 public final class ReflectiveTypeAdapterFactory implements TypeAdapterFactory {
@@ -104,6 +106,111 @@ public final class ReflectiveTypeAdapterFactory implements TypeAdapterFactory {
     fieldNames.add(fieldName);
     fieldNames.addAll(alternates);
     return fieldNames;
+  }
+
+  /**
+   * Performs an explicit precheck of the JSON member names that the reflective adapter for the
+   * given type would use, and reports all name conflicts without creating any adapter, without
+   * creating instances of the inspected type, without invoking field getters and without reading
+   * any JSON.
+   *
+   * <p>The check walks the class hierarchy the same way adapter creation does, applies the
+   * configured {@link Excluder} separately for serialization and deserialization (fields excluded
+   * for a direction do not participate in that direction's name set), resolves generic field types
+   * along the given {@link TypeToken} and computes the effective JSON names using the configured
+   * {@link FieldNamingStrategy} and {@link SerializedName} annotations. For deserialization all
+   * names are considered, including {@link SerializedName#alternate() @SerializedName alternates}
+   * and {@link FieldNamingStrategy#alternateNames(Field)}.
+   *
+   * <p>Conflicts caused by inherited fields, naming strategies or alternate names are reported
+   * separately for each direction, so they can be detected up front (for example at application
+   * startup) instead of when the first JSON document is read or written.
+   *
+   * <p>This method is purely diagnostic; the behavior of the adapters created by this factory is
+   * unchanged.
+   *
+   * @param type the type to inspect, possibly parameterized; generic field types are resolved
+   *     against it
+   * @return a report with the effective serialized and deserialized name sets and all detected
+   *     conflicts; never {@code null}
+   */
+  public FieldNamingConflictReport checkFieldNamingConflicts(TypeToken<?> type) {
+    Class<?> raw = type.getRawType();
+    Class<?> originalRaw = raw;
+
+    // Mirror create(): for these types no fields are bound, so there is nothing to check
+    if (!Object.class.isAssignableFrom(raw)
+        || raw.isInterface()
+        || ReflectionHelper.isAnonymousOrNonStaticLocal(raw)) {
+      return FieldNamingConflictReport.empty(originalRaw);
+    }
+
+    FilterResult filterResult =
+        ReflectionAccessFilterHelper.getFilterResult(reflectionFilters, raw);
+    if (filterResult == FilterResult.BLOCK_ALL) {
+      throw new JsonIOException(
+          "ReflectionAccessFilter does not permit using reflection for "
+              + raw
+              + ". Register a TypeAdapter for this type or adjust the access filter.");
+    }
+
+    boolean isRecord = ReflectionHelper.isRecord(raw);
+    // Maps from JSON member name to the fields using that name, in class-hierarchy order
+    Map<String, List<Field>> serializedNames = new LinkedHashMap<>();
+    Map<String, List<Field>> deserializedNames = new LinkedHashMap<>();
+    Map<Field, Type> resolvedFieldTypes = new LinkedHashMap<>();
+
+    while (raw != Object.class) {
+      Field[] fields = raw.getDeclaredFields();
+
+      // For inherited fields, check if access to their declaring class is allowed
+      if (raw != originalRaw && fields.length > 0) {
+        FilterResult superFilterResult =
+            ReflectionAccessFilterHelper.getFilterResult(reflectionFilters, raw);
+        if (superFilterResult == FilterResult.BLOCK_ALL) {
+          throw new JsonIOException(
+              "ReflectionAccessFilter does not permit using reflection for "
+                  + raw
+                  + " (supertype of "
+                  + originalRaw
+                  + "). Register a TypeAdapter for this type or adjust the access filter.");
+        }
+      }
+
+      for (Field field : fields) {
+        boolean serialize = includeField(field, true);
+        boolean deserialize = includeField(field, false);
+        if (isRecord && Modifier.isStatic(field.getModifiers())) {
+          // Mirror getBoundFields: static record fields are not deserialized
+          deserialize = false;
+        }
+        if (!serialize && !deserialize) {
+          continue; // field does not participate in either direction
+        }
+        // Resolve the generic field type along the TypeToken, the same way adapter creation does
+        Type fieldType = GsonTypes.resolve(type.getType(), raw, field.getGenericType());
+        resolvedFieldTypes.put(field, fieldType);
+
+        List<String> fieldNames = getFieldNames(field);
+        if (serialize) {
+          addFieldName(serializedNames, fieldNames.get(0), field);
+        }
+        if (deserialize) {
+          // All names, including @SerializedName alternates, are matched when reading JSON
+          for (String name : fieldNames) {
+            addFieldName(deserializedNames, name, field);
+          }
+        }
+      }
+      type = TypeToken.get(GsonTypes.resolve(type.getType(), raw, raw.getGenericSuperclass()));
+      raw = type.getRawType();
+    }
+    return new FieldNamingConflictReport(
+        originalRaw, serializedNames, deserializedNames, resolvedFieldTypes);
+  }
+
+  private static void addFieldName(Map<String, List<Field>> names, String name, Field field) {
+    names.computeIfAbsent(name, unused -> new ArrayList<>()).add(field);
   }
 
   @Override
@@ -336,6 +443,195 @@ public final class ReflectiveTypeAdapterFactory implements TypeAdapterFactory {
             + ReflectionHelper.fieldToString(field2)
             + "\nSee "
             + TroubleshootingGuide.createUrl("duplicate-fields"));
+  }
+
+  /**
+   * Result of {@link #checkFieldNamingConflicts(TypeToken)}: the effective JSON member names of a
+   * type for serialization and deserialization, and all conflicting names, reported separately per
+   * direction.
+   */
+  public static final class FieldNamingConflictReport {
+    /** Direction in which a JSON member name is used by the reflective adapter. */
+    public enum Direction {
+      /** Names written to the JSON output during serialization. */
+      SERIALIZE,
+      /**
+       * Names matched against the JSON input during deserialization, including {@link
+       * SerializedName#alternate() @SerializedName alternates}.
+       */
+      DESERIALIZE
+    }
+
+    /** A JSON member name that more than one field maps to for the same direction. */
+    public static final class Conflict {
+      private final Class<?> inspectedType;
+      private final Direction direction;
+      private final String jsonName;
+      private final List<Field> fields;
+
+      private Conflict(
+          Class<?> inspectedType, Direction direction, String jsonName, List<Field> fields) {
+        this.inspectedType = inspectedType;
+        this.direction = direction;
+        this.jsonName = jsonName;
+        this.fields = Collections.unmodifiableList(new ArrayList<>(fields));
+      }
+
+      /** The type that was inspected when this conflict was detected. */
+      public Class<?> inspectedType() {
+        return inspectedType;
+      }
+
+      /** The direction for which the name collides. */
+      public Direction direction() {
+        return direction;
+      }
+
+      /** The colliding JSON member name. */
+      public String jsonName() {
+        return jsonName;
+      }
+
+      /**
+       * All fields (including inherited ones) mapping to {@link #jsonName()}, in class-hierarchy
+       * order, starting with the most specific class.
+       */
+      public List<Field> fields() {
+        return fields;
+      }
+
+      @Override
+      public String toString() {
+        StringBuilder message = new StringBuilder();
+        message
+            .append("Class ")
+            .append(inspectedType.getName())
+            .append(" declares multiple JSON fields named '")
+            .append(jsonName)
+            .append("' for ")
+            .append(direction == Direction.SERIALIZE ? "serialization" : "deserialization")
+            .append("; conflict is caused by fields ");
+        for (int i = 0; i < fields.size(); i++) {
+          if (i > 0) {
+            message.append(" and ");
+          }
+          message.append(ReflectionHelper.fieldToString(fields.get(i)));
+        }
+        return message.toString();
+      }
+    }
+
+    private final Class<?> inspectedType;
+    private final Set<String> serializedNames;
+    private final Set<String> deserializedNames;
+    private final Map<Field, Type> resolvedFieldTypes;
+    private final List<Conflict> conflicts;
+
+    private FieldNamingConflictReport(
+        Class<?> inspectedType,
+        Map<String, List<Field>> serializedNames,
+        Map<String, List<Field>> deserializedNames,
+        Map<Field, Type> resolvedFieldTypes) {
+      this.inspectedType = inspectedType;
+      this.serializedNames = Collections.unmodifiableSet(toNameSet(serializedNames));
+      this.deserializedNames = Collections.unmodifiableSet(toNameSet(deserializedNames));
+      this.resolvedFieldTypes =
+          Collections.unmodifiableMap(new LinkedHashMap<>(resolvedFieldTypes));
+      List<Conflict> conflicts = new ArrayList<>();
+      collectConflicts(conflicts, inspectedType, Direction.SERIALIZE, serializedNames);
+      collectConflicts(conflicts, inspectedType, Direction.DESERIALIZE, deserializedNames);
+      this.conflicts = Collections.unmodifiableList(conflicts);
+    }
+
+    private static FieldNamingConflictReport empty(Class<?> inspectedType) {
+      return new FieldNamingConflictReport(
+          inspectedType, Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap());
+    }
+
+    private static Set<String> toNameSet(Map<String, List<Field>> names) {
+      return new LinkedHashSet<>(names.keySet());
+    }
+
+    private static void collectConflicts(
+        List<Conflict> conflicts,
+        Class<?> inspectedType,
+        Direction direction,
+        Map<String, List<Field>> names) {
+      for (Map.Entry<String, List<Field>> entry : names.entrySet()) {
+        List<Field> fields = entry.getValue();
+        if (fields.size() > 1) {
+          conflicts.add(new Conflict(inspectedType, direction, entry.getKey(), fields));
+        }
+      }
+    }
+
+    /** The type that was inspected. */
+    public Class<?> inspectedType() {
+      return inspectedType;
+    }
+
+    /** Whether at least one name conflict was detected, in either direction. */
+    public boolean hasConflicts() {
+      return !conflicts.isEmpty();
+    }
+
+    /** All detected conflicts, for both directions; empty if there are none. */
+    public List<Conflict> conflicts() {
+      return conflicts;
+    }
+
+    /** All detected conflicts for the given direction; empty if there are none. */
+    public List<Conflict> conflicts(Direction direction) {
+      List<Conflict> result = new ArrayList<>();
+      for (Conflict conflict : conflicts) {
+        if (conflict.direction() == direction) {
+          result.add(conflict);
+        }
+      }
+      return Collections.unmodifiableList(result);
+    }
+
+    /** The JSON member names actually written during serialization. */
+    public Set<String> serializedNames() {
+      return serializedNames;
+    }
+
+    /**
+     * The JSON member names actually matched during deserialization, including {@code alternate}
+     * names.
+     */
+    public Set<String> deserializedNames() {
+      return deserializedNames;
+    }
+
+    /**
+     * The participating fields and their types resolved along the inspected {@link TypeToken}; for
+     * example a field declared as {@code T} in a generic superclass maps to the actual type
+     * argument.
+     */
+    public Map<Field, Type> resolvedFieldTypes() {
+      return resolvedFieldTypes;
+    }
+
+    /**
+     * Throws an {@link IllegalArgumentException} describing all detected conflicts, or does nothing
+     * if there are none. Intended to fail fast (for example at application startup) before any JSON
+     * is read or written.
+     */
+    public void throwIfAnyConflict() {
+      if (conflicts.isEmpty()) {
+        return;
+      }
+      StringBuilder message = new StringBuilder();
+      for (Conflict conflict : conflicts) {
+        if (message.length() > 0) {
+          message.append('\n');
+        }
+        message.append(conflict);
+      }
+      message.append("\nSee ").append(TroubleshootingGuide.createUrl("duplicate-fields"));
+      throw new IllegalArgumentException(message.toString());
+    }
   }
 
   private FieldsData getBoundFields(

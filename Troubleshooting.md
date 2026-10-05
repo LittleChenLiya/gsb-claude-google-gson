@@ -289,6 +289,35 @@ Gson prevents multiple fields with the same name because during deserialization 
 
 **Solution:** First identify the fields with conflicting names based on the exception message. Then decide if you want to rename one of them using the [`@SerializedName`](https://www.javadoc.io/doc/com.google.code.gson/gson/latest/com.google.gson/com/google/gson/annotations/SerializedName.html) annotation or a [`FieldNamingStrategy`](https://javadoc.io/doc/com.google.code.gson/gson/latest/com.google.gson/com/google/gson/FieldNamingStrategy.html), or if you want to [exclude](UserGuide.md#excluding-fields-from-serialization-and-deserialization) one of them. When excluding one of the fields you have to apply the exclusion for both serialization and deserialization (even if your application only performs one of these actions) because the duplicate field check cannot differentiate between these actions.
 
+### Prechecking field name conflicts
+
+`ReflectiveTypeAdapterFactory.checkFieldNamingConflicts(TypeToken)` performs an explicit precheck of the JSON member names a type will use. It computes the actual serialized and deserialized name sets separately (deserialization includes `@SerializedName` `alternate` names), applies the configured `Excluder` per direction (excluded fields do not participate), resolves generic field types along the given `TypeToken`, and reports every conflicting name together with all fields causing it, including inherited ones. The check only reads reflection metadata: it creates no objects, invokes no getters and reads no JSON, so conflicts can be detected at application startup before the first JSON document is processed. The default adapter behavior is unchanged; the precheck is purely diagnostic.
+
+```java
+ConstructorConstructor constructorConstructor =
+    new ConstructorConstructor(Collections.emptyMap(), true, Collections.emptyList());
+ReflectiveTypeAdapterFactory factory =
+    new ReflectiveTypeAdapterFactory(
+        constructorConstructor,
+        FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES, // your naming strategy
+        Excluder.DEFAULT, // your excluder configuration
+        new JsonAdapterAnnotationTypeAdapterFactory(constructorConstructor),
+        Collections.emptyList());
+
+FieldNamingConflictReport report = factory.checkFieldNamingConflicts(TypeToken.get(MyClass.class));
+report.throwIfAnyConflict(); // fail fast before any JSON is read or written
+// or inspect the report programmatically:
+//   report.serializedNames() / report.deserializedNames()
+//   report.conflicts(Direction.SERIALIZE) / report.conflicts(Direction.DESERIALIZE)
+//   report.resolvedFieldTypes()
+```
+
+The precheck is covered by `ReflectiveTypeAdapterFactoryFieldNamingPrecheckTest`, which includes a construction-count test (`precheck_doesNotInstantiateOrInvokeGetters`) verifying that running the precheck neither instantiates the inspected class nor invokes any getter. Run it with:
+
+```
+mvn -pl gson test -Dtest=ReflectiveTypeAdapterFactoryFieldNamingPrecheckTest
+```
+
 ## <a id="java-lang-class-unsupported"></a> `UnsupportedOperationException` when serializing or deserializing `java.lang.Class`
 
 **Symptom:** An `UnsupportedOperationException` is thrown when trying to serialize or deserialize `java.lang.Class`
